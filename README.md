@@ -876,6 +876,3 @@ test/              bun test suites (src modules, index wiring, bench harness) wi
 bench/             benchmark harness; see bench/README.md
 assets/            starter ADVERSARY.md and WATCHDOG.md
 ```
-
-
-Rework verification: rework-verify-79be07fe19920821898a
