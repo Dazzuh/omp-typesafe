@@ -252,12 +252,14 @@ export interface HostCommand {
 
 export interface HostSpan { t: string; s?: string }
 export type HostNode =
-	| { k: "card"; p: { head: readonly HostSpan[]; tone: "info" | "warning" | "error" | "muted" }; c: readonly HostNode[] }
-	| { k: "md"; p: { text: string } }
-	| { k: "kv"; p: { items: readonly { k: readonly HostSpan[]; v: string }[] } };
+	| { k: "tool"; p: { role: string; name: string; title: string; status: "done"; frame: "card"; badges?: readonly { text: string; tone: "info" | "warning" | "error" | "muted" }[] }; c: readonly HostNode[] }
+	| { k: "card"; p: { role: string; head: readonly HostSpan[]; tone: "neutral" }; c: readonly HostNode[] }
+	| { k: "rule"; p: { label: string } }
+	| { k: "text"; p: { spans: readonly HostSpan[]; wrap: "word" } }
+	| { k: "md"; p: { text: string } };
 export interface HostComponent {
 	render: (width: number) => readonly string[];
-	describe: () => HostNode;
+	describe: (cx?: { supports: (kind: "tool") => boolean }) => HostNode;
 }
 export type HostMessageRenderer = (message: { content: unknown }, options: { expanded: boolean }, theme: unknown) => HostComponent | undefined;
 

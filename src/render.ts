@@ -27,19 +27,29 @@ export function noteNode(note: ParsedNote): HostNode | null {
 	const label = labels[note.tag];
 	const severity = note.attrs.find(([name]) => name === "severity")?.[1];
 	const tone = severity === "blocker" ? "error" : severity === "concern" ? "warning" : severity === "nit" ? "muted" : note.tag === "pipeline-check" ? "warning" : "info";
-	const head: HostSpan[] = [{ t: "TypeSafe", s: "strong" }, { t: " · ", s: "muted" }, { t: label, s: "muted" }];
-	if (severity !== undefined) head.push({ t: " · ", s: "muted" }, { t: severity, s: `${tone} strong` });
 	const children: HostNode[] = [{ k: "md", p: { text: note.body } }];
-	const items = note.attrs.filter(([name, value]) => value !== "" && name !== "severity" && name !== "guidance" && name !== "advisor")
-		.map(([name, value]) => ({ k: [{ t: name.replaceAll("_", " "), s: "muted" }], v: value }));
-	if (items.length) children.push({ k: "kv", p: { items } });
-	return { k: "card", p: { head, tone }, c: children };
+	let hasDetails = false;
+	let hasEvidence = false;
+	for (const [name, value] of note.attrs) {
+		if (value === "" || name === "severity" || name === "guidance" || name === "advisor") continue;
+		if (name === "evidence") {
+			children.push({ k: "rule", p: { label: "Evidence" } });
+			hasEvidence = true;
+		} else if (!hasDetails || hasEvidence) {
+			children.push({ k: "rule", p: { label: "Details" } });
+			hasDetails = true;
+			hasEvidence = false;
+		}
+		children.push({ k: "text", p: { spans: [{ t: `${name.replaceAll("_", " ")}: `, s: "muted" }, { t: value }], wrap: "word" } });
+	}
+	return { k: "tool", p: { role: "omp.tool.typesafe", name: "typesafe", title: `TypeSafe · ${label}`, status: "done", frame: "card", ...(severity !== undefined ? { badges: [{ text: severity, tone }] } : {}) }, c: children };
 }
 
-export function noteText(node: HostNode & { k: "card" }): string {
-	const parts = [node.p.head.map((span) => span.t).join(""), ...node.c.filter((child) => child.k === "md").map((child) => child.p.text)];
-	const kv = node.c.find((child) => child.k === "kv");
-	if (kv?.k === "kv") parts.push(kv.p.items.map((item) => `${item.k.map((span) => span.t).join("")}: ${item.v}`).join("\n"));
+export function noteText(node: HostNode & { k: "tool" }): string {
+	const parts = [[node.p.title, ...(node.p.badges ?? []).map((badge) => badge.text)].join(" · "), ...node.c.filter((child) => child.k === "md").map((child) => child.p.text)];
+	for (const child of node.c) {
+		if (child.k === "text") parts.push(child.p.spans.map((span) => span.t).join(""));
+	}
 	return parts.join("\n\n");
 }
 
@@ -54,9 +64,12 @@ export function registerNoteRenderers(pi: ExtensionAPI): void {
 				if (typeof message.content !== "string") return undefined;
 				const note = parseNote(message.content);
 				const node = note && noteNode(note);
-				if (!node || node.k !== "card") return undefined;
+				if (!node || node.k !== "tool") return undefined;
+				const head: HostSpan[] = [{ t: node.p.title, s: "strong" }];
+				for (const badge of node.p.badges ?? []) head.push({ t: " · ", s: "muted" }, { t: badge.text, s: `${badge.tone} strong` });
+				const fallback: HostNode = { k: "card", p: { role: "omp.tool", head, tone: "neutral" }, c: node.c };
 				let text: InstanceType<typeof Text> | undefined;
-				return { describe: () => node, render: (width) => (text ??= new Text(noteText(node), 1, 0)).render(width) };
+				return { describe: (cx) => cx?.supports("tool") === false ? fallback : node, render: (width) => (text ??= new Text(noteText(node), 1, 0)).render(width) };
 			} catch (err) {
 				pi.logger?.debug?.(`[typesafe] note render skipped: ${describeError(err)}`);
 				return undefined;
