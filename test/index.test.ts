@@ -64,10 +64,38 @@ const clientMock = () => ({
 });
 mock.module(join(srcCopy, "client.ts"), clientMock);
 
-const { default: typesafeExtension } = (await import(join(srcCopy, "index.ts"))) as typeof import("../src/index");
+const { default: typesafeExtension, adversaryCompletions } = (await import(join(srcCopy, "index.ts"))) as typeof import("../src/index");
 const reviewer = (await import(join(srcCopy, "reviewer.ts"))) as typeof import("../src/reviewer");
 const ambiguity = (await import(join(srcCopy, "ambiguity.ts"))) as typeof import("../src/ambiguity");
 const subagentModule = (await import(join(srcCopy, "subagent.ts"))) as typeof import("../src/subagent");
+
+describe("adversary completions", () => {
+	test("offers subcommands and values", () => {
+		const all = adversaryCompletions("");
+		expect(all?.map((item) => item.label)).toEqual(["status", "last", "on", "off", "role", "gate", "dump"]);
+		expect(all?.find((item) => item.label === "role")?.value).toBe("role ");
+		expect(all?.find((item) => item.label === "gate")?.value).toBe("gate ");
+		expect(adversaryCompletions("st")).toEqual([{ value: "status", label: "status", description: "Show reviewer, gate and guard status" }]);
+		expect(adversaryCompletions("role ")).toEqual([
+			{ value: "role advisory", label: "advisory" },
+			{ value: "role adversarial", label: "adversarial" },
+		]);
+		expect(adversaryCompletions("gate o")).toEqual([
+			{ value: "gate on", label: "on" },
+			{ value: "gate off", label: "off" },
+		]);
+		expect(adversaryCompletions("  ROLE A")).toEqual([
+			{ value: "role advisory", label: "advisory" },
+			{ value: "role adversarial", label: "adversarial" },
+		]);
+	});
+
+	test("falls back to host completion for unmatched input", () => {
+		for (const prefix of ["status x", "zz", "role x y", "role z"]) {
+			expect(adversaryCompletions(prefix)).toBeNull();
+		}
+	});
+});
 
 const agent = join(root, "agent");
 const cfgPath = join(root, "typesafe.json");
@@ -166,6 +194,7 @@ interface Harness {
 
 interface SetupOptions {
 	hasUI?: boolean;
+	renderers?: boolean;
 	/** null: the host predates pi.getActiveTools. */
 	activeTools?: string[] | null;
 	cwd?: string;
@@ -223,6 +252,10 @@ function setup(cfg: object = {}, branch: unknown[] = [], options: SetupOptions =
 			return h.exec(cmd, args, execOptions);
 		},
 	};
+	if (options.renderers) {
+		pi.registerMessageRenderer = () => {};
+		pi.pi = { Text: class { render() { return []; } } };
+	}
 	if (options.activeTools !== null) pi.getActiveTools = () => h.activeTools;
 	h.pi = pi;
 	(options.factory ?? typesafeExtension)(pi);
@@ -277,6 +310,85 @@ function gateAnswers(score = 0.5, userCanAnswer = 0.9): Answers {
 const reviewCalls = () => mockState.calls.filter((c) => "severity" in c.questions);
 const gateCalls = () => mockState.calls.filter((c) => "goal_clarity" in c.questions);
 const scores = () => ambiguity.getAmbiguityTelemetry().scores;
+
+describe("adversary reports", () => {
+	test("status uses a card only with a renderer and an idle UI", async () => {
+		const h = setup({}, [userMsg("go")], { hasUI: true, renderers: true });
+		h.ctx.isIdle = () => true;
+		await h.start();
+		const notices = h.notices.length;
+		await h.command("adversary", "status");
+		const sent = h.sent.at(-1)!;
+		expect(sent.message.customType).toBe("ai.typesafe.report");
+		expect(sent.message.details.sections.map((section: { label: string }) => section.label)).toEqual(["Reviewer", "Activity", "Ambiguity gate", "Guards"]);
+		expect(sent.message.content).toContain("subagent guard: on; subagent sessions skipped=0 (hook calls skipped=0)");
+		expect(sent.options).toBeUndefined();
+		expect(h.notices.length).toBe(notices);
+
+		h.ctx.isIdle = () => false;
+		await h.command("adversary", "status");
+		expect(h.notices.at(-1)!.message).toBe(sent.message.content);
+		expect(h.sent.length).toBe(1);
+		h.ctx.isIdle = () => true;
+		h.sendThrows = true;
+		await h.command("adversary", "status");
+		expect(h.notices.at(-1)!.message).toBe(sent.message.content);
+
+		const withoutRenderer = setup({}, [userMsg("go")], { hasUI: true });
+		withoutRenderer.ctx.isIdle = () => true;
+		await withoutRenderer.start();
+		await withoutRenderer.command("adversary", "status");
+		expect(withoutRenderer.sent).toEqual([]);
+		expect(withoutRenderer.notices.at(-1)!.message).toBe(sent.message.content);
+
+		const headless = setup({}, [userMsg("go")], { renderers: true });
+		headless.ctx.isIdle = () => true;
+		const logs: string[] = [];
+		headless.pi.logger.info = (message: string) => logs.push(message);
+		await headless.start();
+		await headless.command("adversary", "status");
+		expect(headless.sent).toEqual([]);
+		expect(logs).toContain(`[typesafe] ${sent.message.content}`);
+	});
+
+	test("last preserves JSON fallback and shows grouped review details in a card", async () => {
+		const h = setup({}, [userMsg("refactor x")], { hasUI: true, renderers: true });
+		h.ctx.isIdle = () => true;
+		await h.start();
+		await h.command("adversary", "last");
+		expect(h.notices.at(-1)!.message).toBe("no reviews yet");
+		await h.fire("turn_start", { turnIndex: 0 });
+		replies.review = reviewAnswers("action", "adversarial", 1.7, { breaks_contract: 0.9 });
+		await toolResult(h, "edit", "c1", { path: "a.ts" });
+		const record = reviewer.getLastReviewRecord()!;
+		expect(record.note).toBeDefined();
+		await h.command("adversary", "last");
+		const sent = h.sent.at(-1)!;
+		expect(sent.message.customType).toBe("ai.typesafe.report");
+		expect(sent.options).toBeUndefined();
+		expect(sent.message.content).toBe(JSON.stringify(record, null, 2));
+		expect(sent.message.details.title).toBe("last review");
+		const sections = sent.message.details.sections;
+		expect(sections.map((section: { label: string }) => section.label)).toEqual(["Review", "Scores", "State", "Usage"]);
+		expect(sections[0].lines.find((line: string) => line.startsWith("note: "))).not.toContain("<adversarial-note");
+		expect(sections[1].lines).toEqual(Object.entries(record.scores ?? {}).map(([key, value]) => `${key}: ${value}`));
+		expect(sections[2].lines).toEqual(Object.entries(record.stateSummary ?? {}).map(([key, value]) => `${key}: ${value}`));
+		expect(sections[3].lines).toContain(`input tokens: ${record.usage.inputTokens}`);
+		h.ctx.isIdle = () => false;
+		await h.command("adversary", "last");
+		expect(h.notices.at(-1)!.message).toBe(JSON.stringify(record, null, 2));
+	});
+
+	test("reports are removed from model context without changing other messages", async () => {
+		const h = setup();
+		mockState.apiKey = false;
+		const user = { role: "user" };
+		const note = { role: "custom", customType: "another.type" };
+		expect(await h.fire("context", { messages: [user, { role: "custom", customType: "ai.typesafe.report" }, note] })).toEqual({ messages: [user, note] });
+		expect(await h.fire("context", { messages: [user, { role: "custom", customType: "ai.typesafe.report" }] }, { ...h.ctx, agent: { kind: "sub" } })).toEqual({ messages: [user] });
+		expect(await h.fire("context", { messages: [user, note] })).toBeUndefined();
+	});
+});
 
 describe("read-only turn eligibility", () => {
 	const call = (name: string, text = "") => ({

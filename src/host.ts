@@ -88,6 +88,7 @@ export interface HostMessage {
 	customType: string;
 	content: string;
 	display: boolean;
+	details?: unknown;
 	attribution?: "agent" | "user";
 }
 
@@ -247,6 +248,8 @@ export interface HostTool<Params> {
 
 export interface HostCommand {
 	description: string;
+	/** Items for the text after `/name `; null hands completion back to omp (file completion). */
+	getArgumentCompletions?: (argumentPrefix: string) => { value: string; label: string; description?: string }[] | null;
 	handler: (args: string, ctx: HostContext) => Promise<void>;
 }
 
@@ -261,7 +264,7 @@ export interface HostComponent {
 	render: (width: number) => readonly string[];
 	describe: (cx?: { supports: (kind: "tool") => boolean }) => HostNode;
 }
-export type HostMessageRenderer = (message: { content: unknown }, options: { expanded: boolean }, theme: unknown) => HostComponent | undefined;
+export type HostMessageRenderer = (message: { content: unknown; details?: unknown }, options: { expanded: boolean }, theme: unknown) => HostComponent | undefined;
 
 export interface ExtensionAPI {
 	logger?: HostLogger;

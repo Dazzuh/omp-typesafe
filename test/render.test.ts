@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { ExtensionAPI, HostMessageRenderer } from "../src/host";
-import { NOTE_TYPES, noteNode, noteText, parseNote, registerNoteRenderers } from "../src/render";
+import { NOTE_TYPES, REPORT_CUSTOM_TYPE, isReportDetails, noteNode, noteText, parseNote, registerRenderers, reportNode, reportRows } from "../src/render";
 import { escapeAttr } from "../src/text";
 
 const field = (name: string, value: string) => ({ k: "text" as const, p: { spans: [{ t: `${name}: `, s: "muted" }, { t: value }], wrap: "word" as const } });
@@ -43,6 +43,22 @@ describe("note rendering", () => {
 		expect(noteNode(parseNote('<constructor>\nx\n</constructor>')!)).toBeNull();
 	});
 
+	test("parses report rows without splitting unlabelled segments", () => {
+		expect(reportRows(["role: adversarial; phases: plan,execute"])).toEqual([["role", "adversarial"], ["phases", "plan,execute"]]);
+		expect(reportRows(["notes delivered: nit=0 concern=0 blocker=0; downgraded=0; steers=0"])).toEqual([["notes delivered", "nit=0 concern=0 blocker=0; downgraded=0; steers=0"]]);
+		expect(reportRows(["api key: present; client error: x"])).toEqual([["api key", "present"], ["client error", "x"]]);
+		expect(reportRows(["x; y", "z"])).toEqual([["", "x; y"], ["", "z"]]);
+	});
+
+	test("renders report sections and omits empty sections", () => {
+		const details = { title: "status", sections: [{ label: "Reviewer", lines: ["adversary: enabled", "role: adversarial; phases: plan,execute"] }, { label: "Empty", lines: [] }] };
+		expect(reportNode(details)).toEqual({ k: "tool", p: { role: "omp.tool.typesafe", name: "typesafe", title: "TypeSafe · status", status: "done", frame: "card" }, c: [
+			{ k: "rule", p: { label: "Reviewer" } }, field("adversary", "enabled"), field("role", "adversarial"), field("phases", "plan,execute"),
+		] });
+		expect(isReportDetails(details)).toBe(true);
+		for (const value of [null, {}, { title: "x", sections: [null] }, { title: "x", sections: [{ label: "x", lines: [1] }] }]) expect(isReportDetails(value)).toBe(false);
+	});
+
 	test("registers all types and provides native and terminal fallbacks", () => {
 		const renderers = new Map<string, HostMessageRenderer>();
 		class Text {
@@ -50,8 +66,8 @@ describe("note rendering", () => {
 			render(_width: number): string[] { return [this.text]; }
 		}
 		const pi = { pi: { Text }, registerMessageRenderer: (type: string, renderer: HostMessageRenderer) => renderers.set(type, renderer) } as unknown as ExtensionAPI;
-		registerNoteRenderers(pi);
-		expect([...renderers.keys()]).toEqual([...NOTE_TYPES]);
+		expect(registerRenderers(pi)).toBe(true);
+		expect([...renderers.keys()]).toEqual([...NOTE_TYPES, REPORT_CUSTOM_TYPE]);
 		const renderer = renderers.get(NOTE_TYPES[0])!;
 		const options = { expanded: false };
 		expect(renderer({ content: [] }, options, null)).toBeUndefined();
@@ -64,6 +80,12 @@ describe("note rendering", () => {
 		expect(component.render(80)).toEqual(["TypeSafe · adversary · nit\n\nCheck."]);
 		const gate = renderers.get(NOTE_TYPES[2])!({ content: '<ambiguity-gate score="0.46" gap="non_goals">\nAsk the user.\n</ambiguity-gate>' }, options, null)!;
 		expect(gate.render(80)).toEqual(["TypeSafe · ambiguity gate\n\nAsk the user.\n\nscore: 0.46\n\ngap: non_goals"]);
-		registerNoteRenderers({} as ExtensionAPI);
+		const report = renderers.get(REPORT_CUSTOM_TYPE)!;
+		expect(report({ content: "fallback" }, options, null)).toBeUndefined();
+		expect(report({ content: "fallback", details: { title: 1 } }, options, null)).toBeUndefined();
+		const reportComponent = report({ content: "fallback", details: { title: "status", sections: [{ label: "Reviewer", lines: ["adversary: enabled"] }] } }, options, null)!;
+		expect(reportComponent.describe().k).toBe("tool");
+		expect(reportComponent.render(80)).toEqual(["TypeSafe · status\n\nadversary: enabled"]);
+		expect(registerRenderers({} as ExtensionAPI)).toBe(false);
 	});
 });

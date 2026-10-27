@@ -576,6 +576,9 @@ Without that:
 
 - `/adversary` toggles the reviewer for this session. Subcommands: `on`, `off`, `status`, `last`, `dump`,
   `role advisory|adversarial`, `gate on|off`.
+  Argument completion lists subcommands and the `role` and `gate` values. When the UI supports cards and the session
+  is idle, `status` and `last` appear in the transcript but are excluded from model context; otherwise they use notices
+  (or the log in headless runs). Reports are still stored in the session history.
   - `off` also silences the ambiguity gate (steers and propose blocks) unless `gate on` was set explicitly.
   - `role` overrides `role`/`TYPESAFE_ROLE` for the rest of the session and reloads that role's priorities.
   - `status` reports the resolved role, tools (or `none`), model and last resolved model, API key and client
@@ -864,6 +867,7 @@ src/host.ts        local types for the slice of omp's extension API in use (no r
 src/subagent.ts    subagent guard: tells a subagent's session from the main one, counts what it skips
 src/ambiguity.ts   plan-mode ambiguity gate: battery, composite math, question templates, decisions, telemetry
 src/reviewer.ts    role-aware batteries, severity derivation, emission guard, budgets, delivery routing
+src/render.ts      TypeSafe note and command report card renderers
 src/evidence.ts    git probes via pi.exec, missed-callsite grep, commands-run, repo outline
 src/branch.ts      session-branch scanner (camelCase roles), plan-mode detection, plan text, skill-prompt turns
 src/client.ts      @typesafe-ai/sdk wrapper: usage tracking, timeouts, error classification

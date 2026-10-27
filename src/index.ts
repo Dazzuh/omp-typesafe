@@ -21,9 +21,10 @@ import { createCompactor } from "./compaction";
 import type { ContextReducer } from "./compaction";
 import { agentDir, getConfig, getConfigWarnings, loadConfig, subagentGuardEnabled } from "./config";
 import type { TypesafeRole } from "./config";
-import type { ExtensionAPI, HostContentBlock, HostContext, HostEvents, HostLogger, HostMessage, NotifyLevel, ToolCallResult, ZodSchema } from "./host";
+import type { ExtensionAPI, HostContentBlock, HostContext, HostEvents, HostLogger, HostMessage, NotifyLevel, SendMessageOptions, ToolCallResult, ZodSchema } from "./host";
 import { loadPriorities } from "./priorities";
-import { registerNoteRenderers } from "./render";
+import { parseNote, registerRenderers, REPORT_CUSTOM_TYPE } from "./render";
+import type { ReportSection } from "./render";
 import { getSubagentStats, resetSubagentStats, skipSubagent } from "./subagent";
 import { captureBaseline, collectEvidence, collectStatus, recordAction, repoOutline, resetEvidenceTurn } from "./evidence";
 import type { CollectOptions, Evidence } from "./evidence";
@@ -492,9 +493,38 @@ interface SteerOptions extends Pick<GateRunOptions, "status"> {
 	asReturn?: boolean;
 }
 
+const ADVERSARY_SUBCOMMANDS = [
+	{ name: "status", description: "Show reviewer, gate and guard status" },
+	{ name: "last", description: "Show the most recent review" },
+	{ name: "on", description: "Enable review for this session" },
+	{ name: "off", description: "Disable review for this session" },
+	{ name: "role", description: "Switch role: advisory or adversarial", values: ["advisory", "adversarial"] },
+	{ name: "gate", description: "Turn the ambiguity gate on or off", values: ["on", "off"] },
+	{ name: "dump", description: "Write the review history to a JSON file" },
+] as const;
+
+export function adversaryCompletions(prefix: string): { value: string; label: string; description?: string }[] | null {
+	const text = prefix.toLowerCase().trimStart();
+	const space = text.indexOf(" ");
+	if (space === -1) {
+		const matches = ADVERSARY_SUBCOMMANDS.filter((subcommand) => subcommand.name.startsWith(text)).map((subcommand) => ({
+			value: "values" in subcommand ? `${subcommand.name} ` : subcommand.name,
+			label: subcommand.name,
+			description: subcommand.description,
+		}));
+		return matches.length ? matches : null;
+	}
+	const head = text.slice(0, space);
+	const rest = text.slice(space + 1);
+	const subcommand = ADVERSARY_SUBCOMMANDS.find((entry) => entry.name === head);
+	if (!subcommand || !("values" in subcommand) || rest.includes(" ")) return null;
+	const matches = subcommand.values.filter((value) => value.startsWith(rest)).map((value) => ({ value: `${head} ${value}`, label: value }));
+	return matches.length ? matches : null;
+}
+
 export default function typesafeExtension(pi: ExtensionAPI) {
 	pi.setLabel("TypeSafe Adversary");
-	registerNoteRenderers(pi);
+	const reportsRendered = registerRenderers(pi);
 	const logger = pi.logger;
 	const z = pi.zod;
 
@@ -620,6 +650,12 @@ export default function typesafeExtension(pi: ExtensionAPI) {
 	on("session_tree", resetCursorAndPlan);
 	on("session_compact", resetCursor);
 
+	// Reports are for the user; the model never sees them.
+	pi.on("context", (event) => {
+		const messages = event.messages?.filter((m) => !("customType" in m && m.customType === REPORT_CUSTOM_TYPE));
+		return messages && messages.length !== event.messages?.length ? { messages } : undefined;
+	});
+
 	// Replaces the messages of this one request, never the session. Off without a key: nothing to score with, and no cost.
 	on("context", async (event) => {
 		const cfg = getConfig().compaction;
@@ -659,11 +695,8 @@ export default function typesafeExtension(pi: ExtensionAPI) {
 		excludePipeline: getConfig().pipeline.skillAware,
 	});
 
-	/**
-	 * Queue a host message; sendMessage returns void, so all that can be reported is that it did not throw. Only an aside goes
-	 * out this way: the one caller (the spec note) needs its message at the model's next step, and `nextTurn` would be later.
-	 */
-	const send = (message: HostMessage, options: { deliverAs: "aside" }): boolean => {
+	/** Queue a host message and return true when the call did not throw. */
+	const send = (message: HostMessage, options?: SendMessageOptions): boolean => {
 		try {
 			const sent: unknown = pi.sendMessage(message, options);
 			if (sent instanceof Promise) sent.catch((err) => logger?.warn?.(`[typesafe] sendMessage rejected: ${describeError(err)}`));
@@ -672,6 +705,12 @@ export default function typesafeExtension(pi: ExtensionAPI) {
 			logger?.warn?.(`[typesafe] sendMessage failed: ${describeError(err)}`);
 			return false;
 		}
+	};
+
+	/** A report is a card only when the session is idle; otherwise sending it would steer the turn. */
+	const report = (ctx: HostContext, title: string, sections: ReportSection[], text = sections.flatMap((section) => section.lines).join("\n")): void => {
+		if (reportsRendered && ctx.hasUI === true && ctx.isIdle?.() === true && send({ customType: REPORT_CUSTOM_TYPE, content: text, display: true, details: { title, sections } })) return;
+		notifyVia(ctx, logger, text);
 	};
 
 	// ---- ambiguity gate ------------------------------------------------------
@@ -1315,7 +1354,8 @@ export default function typesafeExtension(pi: ExtensionAPI) {
 	});
 
 	pi.registerCommand("adversary", {
-		description: "TypeSafe adversary reviewer: toggle | on | off | status | last | dump | role | gate",
+		description: "TypeSafe reviewer: status, settings, history",
+		getArgumentCompletions: adversaryCompletions,
 		handler: async (args, ctx) => {
 			await refreshApiKey(ctx.modelRegistry);
 			const tokens = typeof args === "string" ? args.trim().split(/\s+/).filter((t) => t.length > 0) : [];
@@ -1358,15 +1398,20 @@ export default function typesafeExtension(pi: ExtensionAPI) {
 				const suppressed = Object.entries(stats.suppressed)
 					.map(([reason, count]) => `${reason}=${count}`)
 					.join(" ");
-				const lines = [
+				const sections: ReportSection[] = [
+					{ label: "Reviewer", lines: [
 					`adversary: ${reviewEnabled() ? "enabled" : "disabled"}${sessionOverride !== null ? ` (session override: ${sessionOverride ? "on" : "off"})` : ""}`,
 					`role: ${resolvedRole()}${sessionRoleOverride !== null ? ` (session override: ${sessionRoleOverride})` : ""}; phases: ${cfg.phases.join(",")}`,
 					`tools: ${cfg.adversary.tools.length > 0 ? cfg.adversary.tools.join(",") : "none"}`,
 					`model: ${cfg.model}${resolved ? ` (last resolved: ${resolved})` : ""}`,
 					`api key: ${apiKeyPresent() ? "present" : "MISSING"}${clientError ? `; client error: ${clientError}` : ""}`,
+					] },
+					{ label: "Activity", lines: [
 					`notes delivered: nit=${stats.delivered.nit} concern=${stats.delivered.concern} blocker=${stats.delivered.blocker}; downgraded=${stats.downgraded}; steers=${stats.steers}`,
 					`suppressed: ${suppressed || "none"}; errors=${stats.errors}`,
 					`usage: ${usage.requests} requests, ${usage.inputTokens} in / ${usage.outputTokens} out tokens, ~$${estimateCostUsd().toFixed(6)}`,
+					] },
+					{ label: "Ambiguity gate", lines: [
 					(() => {
 						const last = getLastAmbiguityScore();
 						const g = cfg.ambiguityGate;
@@ -1374,15 +1419,31 @@ export default function typesafeExtension(pi: ExtensionAPI) {
 						if (!last) return `ambiguity gate: ${state} (threshold ${fmt2(g.threshold)}); no score yet; asks observed=${asksObserved()}`;
 						return `ambiguity gate: ${state} (threshold ${fmt2(g.threshold)}); last ${fmt2(last.ambiguity)} trigger=${last.trigger} weakest=${last.weakest} gap=${last.gap} decision=${last.decision}; asks observed=${asksObserved()}`;
 					})(),
+					] },
+					{ label: "Guards", lines: [
 					`subagent guard: ${subagentGuardEnabled() ? "on" : "off (TYPESAFE_SUBAGENT_GUARD)"}; subagent sessions skipped=${subagents.sessions} (hook calls skipped=${subagents.hookCalls})`,
 					`pipeline guards: plan guard ${onOff(p.planGuard)} (blocked=${planGuardBlocks}); approval guard ${onOff(p.approvalGuard)} (blocked=${approvalBlocks}, would block=${approvalWouldBlocks}); jev ${onOff(p.jev.enabled)}`,
 					`pipeline checks: spec checks ${onOff(p.specChecks)} (notes sent=${specNotesSent}); skill-aware ${onOff(p.skillAware)} (${p.skills.length > 0 ? p.skills.join(",") : "no skills"})`,
+					] },
 				];
-				if (warnings.length > 0) lines.push(`config warnings: ${warnings.join(" | ")}`);
-				notifyVia(ctx, logger, lines.join("\n"));
+				if (warnings.length > 0) sections.push({ label: "Config warnings", lines: [`config warnings: ${warnings.join(" | ")}`] });
+				report(ctx, "status", sections);
 			} else if (sub === "last") {
 				const record = getLastReviewRecord();
-				notifyVia(ctx, logger, record ? JSON.stringify(record, null, 2) : "no reviews yet");
+				if (!record) {
+					notifyVia(ctx, logger, "no reviews yet");
+				} else {
+					const review = Object.entries(record)
+						.filter(([key, value]) => value !== undefined && !["scores", "stateSummary", "usage", "error"].includes(key))
+						.map(([key, value]) => `${key}: ${key === "note" && typeof value === "string" ? parseNote(value)?.body ?? value : Array.isArray(value) ? value.join(", ") : String(value)}`);
+					const sections: ReportSection[] = [
+						{ label: "Review", lines: review },
+						{ label: "Scores", lines: Object.entries(record.scores ?? {}).map(([key, value]) => `${key}: ${value}`) },
+						{ label: "State", lines: Object.entries(record.stateSummary ?? {}).map(([key, value]) => `${key}: ${value}`) },
+						{ label: "Usage", lines: [`input tokens: ${record.usage.inputTokens}`, `output tokens: ${record.usage.outputTokens}`, ...(record.error !== undefined ? [`error: ${record.error}`] : [])] },
+					];
+					report(ctx, "last review", sections, JSON.stringify(record, null, 2));
+				}
 			} else if (sub === "dump") {
 				const sessionId = safeFileId(ctx?.sessionManager?.getSessionId?.());
 				const path = join(dumpDir(), `adversary-${sessionId}.json`);
