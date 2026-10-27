@@ -26,6 +26,7 @@ const {
 	getLastResolvedModel,
 	getSessionUsage,
 	noul,
+	refreshApiKey,
 	resetClient,
 	resetUsage,
 	retryBudgetMs,
@@ -96,7 +97,8 @@ beforeEach(async () => {
 	await useConfig({ model: "jev-1.13.0" });
 });
 
-afterEach(() => {
+afterEach(async () => {
+	await refreshApiKey();
 	setClientLogger(undefined);
 	resetClient();
 });
@@ -636,6 +638,45 @@ describe("usage accounting", () => {
 		expect(getLastResolvedModel()).toBe("jev-1.13.7");
 		resetClient();
 		expect(getLastResolvedModel()).toBeNull();
+	});
+});
+
+describe("omp credentials", () => {
+	test("registry credentials override the environment, rotate after a 402, and fall back without exposing secrets", async () => {
+		let key: string | undefined = "registry-first";
+		const registry = { getApiKeyForProvider: async (provider: string) => {
+			expect(provider).toBe("typesafe");
+			return key;
+		} };
+		handler = (body) => seen.at(-1)?.authorization === "Bearer registry-first" ? errorResponse(402) : okResponse(body);
+		await refreshApiKey(registry);
+		expect(apiKeyPresent()).toBe(true);
+		expect(process.env.TYPESAFE_API_KEY).toBe("test-key");
+		await expect(ask("first", questions)).rejects.toBeInstanceOf(APIError);
+		key = "registry-second";
+		await refreshApiKey(registry);
+		await ask("second", questions);
+		key = undefined;
+		await refreshApiKey(registry);
+		await ask("fallback", questions);
+		expect(seen.map((s) => s.authorization)).toEqual(["Bearer registry-first", "Bearer registry-second", "Bearer test-key"]);
+		expect(process.env.TYPESAFE_API_KEY).toBe("test-key");
+	});
+
+	test("blank or failing registry resolution falls back to the environment and missing keys remain inactive", async () => {
+		const original = process.env.TYPESAFE_API_KEY;
+		try {
+			await refreshApiKey({ getApiKeyForProvider: async () => "  " });
+			await ask("blank", questions);
+			await refreshApiKey({ getApiKeyForProvider: async () => { throw new Error("secret must not be logged"); } });
+			await ask("failure", questions);
+			expect(seen.map((s) => s.authorization)).toEqual(["Bearer test-key", "Bearer test-key"]);
+			delete process.env.TYPESAFE_API_KEY;
+			await refreshApiKey();
+			expect(apiKeyPresent()).toBe(false);
+		} finally {
+			process.env.TYPESAFE_API_KEY = original;
+		}
 	});
 });
 

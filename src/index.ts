@@ -10,6 +10,7 @@ import {
 	getLastResolvedModel,
 	getSessionUsage,
 	noul,
+	refreshApiKey,
 	resetClient,
 	resetUsage,
 	score,
@@ -504,7 +505,11 @@ export default function typesafeExtension(pi: ExtensionAPI) {
 		event: K,
 		handler: (event: HostEvents[K]["event"], ctx: HostContext) => HostEvents[K]["result"] | Promise<HostEvents[K]["result"]>,
 	): void => {
-		pi.on(event, (e, ctx) => (skipSubagent(ctx) ? (undefined as HostEvents[K]["result"]) : handler(e, ctx)));
+		pi.on(event, async (e, ctx) => {
+			if (skipSubagent(ctx)) return undefined as HostEvents[K]["result"];
+			await refreshApiKey(ctx.modelRegistry);
+			return handler(e, ctx);
+		});
 	};
 
 	/** Scan the branch and notice when a plan has started or ended, so per-plan state never outlives its plan. */
@@ -574,8 +579,8 @@ export default function typesafeExtension(pi: ExtensionAPI) {
 		pi.setLabel(roleLabel(resolvedRole()));
 		for (const warning of getConfigWarnings()) notifyVia(ctx, logger, warning, "warning");
 		if (announceMissingKey && !apiKeyPresent()) {
-			logger?.warn?.("[typesafe] TYPESAFE_API_KEY is not set; adversary and typesafe_ask stay inactive");
-			notifyVia(ctx, logger, "TypeSafe adversary inactive: TYPESAFE_API_KEY not set", "warning");
+			logger?.warn?.("[typesafe] no TypeSafe credential; use /login typesafe or set TYPESAFE_API_KEY; adversary and typesafe_ask stay inactive");
+			notifyVia(ctx, logger, "TypeSafe adversary inactive: use /login typesafe or set TYPESAFE_API_KEY", "warning");
 		}
 	};
 
@@ -1268,8 +1273,9 @@ export default function typesafeExtension(pi: ExtensionAPI) {
 			),
 			model: z.string().optional(),
 		}),
-		async execute(_toolCallId: string, params: AskToolParams, signal?: AbortSignal) {
+		async execute(_toolCallId: string, params: AskToolParams, signal?: AbortSignal, _onUpdate?: unknown, ctx?: HostContext) {
 			try {
+				await refreshApiKey(ctx?.modelRegistry);
 				let state: unknown = params.state;
 				if (params.stateFormat === "json") {
 					try {
@@ -1283,7 +1289,7 @@ export default function typesafeExtension(pi: ExtensionAPI) {
 					return { content: [{ type: "text", text: `typesafe_ask: ${built.error ?? "invalid questions"}` }], isError: true };
 				}
 				if (!apiKeyPresent()) {
-					return { content: [{ type: "text", text: "typesafe_ask: TYPESAFE_API_KEY is not set" }], isError: true };
+					return { content: [{ type: "text", text: "typesafe_ask: use /login typesafe or set TYPESAFE_API_KEY" }], isError: true };
 				}
 				// What the model wrote into the question (instructions, option and rubric text) leaves like the state does. The
 				// question ids and option names are keys here, and not secret-named keys: they are masked by pattern, never whole.
@@ -1309,6 +1315,7 @@ export default function typesafeExtension(pi: ExtensionAPI) {
 	pi.registerCommand("adversary", {
 		description: "TypeSafe adversary reviewer: toggle | on | off | status | last | dump | role | gate",
 		handler: async (args, ctx) => {
+			await refreshApiKey(ctx.modelRegistry);
 			const tokens = typeof args === "string" ? args.trim().split(/\s+/).filter((t) => t.length > 0) : [];
 			const sub = tokens[0] ?? "";
 			const cfg = getConfig();
@@ -1392,13 +1399,14 @@ export default function typesafeExtension(pi: ExtensionAPI) {
 	pi.registerCommand("typesafe", {
 		description: "TypeSafe connectivity probe: test",
 		handler: async (args, ctx) => {
+			await refreshApiKey(ctx.modelRegistry);
 			const sub = typeof args === "string" ? args.trim().split(/\s+/)[0] || "test" : "test";
 			if (sub !== "test") {
 				notifyVia(ctx, logger, "usage: /typesafe test", "warning");
 				return;
 			}
 			if (!apiKeyPresent()) {
-				notifyVia(ctx, logger, "TYPESAFE_API_KEY is not set", "warning");
+				notifyVia(ctx, logger, "Use /login typesafe or set TYPESAFE_API_KEY", "warning");
 				return;
 			}
 			const started = Date.now();

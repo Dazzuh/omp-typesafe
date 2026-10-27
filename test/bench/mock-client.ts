@@ -35,6 +35,7 @@ export function noulAnswer(p: number): { type: string; noul: number; confidence:
 export function installClientMock(): void {
 	mock.module("../../src/client", () => ({
 		apiKeyPresent: () => clientMock.apiKey,
+		refreshApiKey: async () => {},
 		ask: async (state: unknown, questions: AskCall["questions"], opts: Record<string, unknown>) => {
 			const call: AskCall = { state, questions, opts };
 			clientMock.calls.push(call);

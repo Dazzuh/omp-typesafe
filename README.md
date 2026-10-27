@@ -27,12 +27,14 @@ Everything the reviewer judges is sent to TypeSafe's API, including parts of you
 
 ## Install
 
-Requires omp and a `TYPESAFE_API_KEY` ([typesafe.ai](https://typesafe.ai)). Without the key the extension loads,
-logs a warning, shows a notice at session start, and stays inactive; it never wedges the agent.
+Requires omp and a TypeSafe credential ([typesafe.ai](https://typesafe.ai)). In omp, use `/login` and select
+TypeSafe; the extension uses that credential without an env file. Alternatively, set `TYPESAFE_API_KEY` in the
+environment. The omp registry's credential takes precedence, with the environment as a fallback. Changes are picked
+up on the next extension event, command, or tool call. Without either, the extension loads, warns at session start,
+and stays inactive; it never wedges the agent.
 
 ```sh
 omp plugin install github:siddicky/omp-typesafe
-export TYPESAFE_API_KEY=...
 ```
 
 Or from a clone:
@@ -283,7 +285,7 @@ Rules worth knowing:
   call, and gives up after `min(9 s, timeoutMs + 1.8 s)`, well inside omp's fail-closed `tool_call` handler
   timeout (30 s by default, `extensionHandlers.toolCallTimeoutMs`). A timeout, a throw or a Jev error is a no-op
   and never blocks a write.
-- **Eligibility.** Plan mode only, `TYPESAFE_API_KEY` set, the gate enabled, and fewer than `maxAsksPerPlan`
+- **Eligibility.** Plan mode only, a TypeSafe credential present, the gate enabled, and fewer than `maxAsksPerPlan`
   answers observed. It does not depend on `phases`. `/adversary off` silences it for the session, and
   `/adversary gate on|off` sets it independently.
 - **Telemetry.** Each evaluation is logged with its decision: `steer`, `block`, `would_steer`, `would_block`,
@@ -317,7 +319,7 @@ out of plan mode and of setups whose `phases` lack `execute`. It also needs the 
 ## Context compaction
 
 A long session sends every old tool output with every model request. With `compaction.enabled` (on by default, and only
-with a `TYPESAFE_API_KEY`), the extension asks Jev, before a request whose context is at least `compaction.minChars`
+with a TypeSafe credential), the extension asks Jev, before a request whose context is at least `compaction.minChars`
 characters (150,000), whether each tool call and each tool result in the history is still needed. A result Jev gives less
 than `compaction.keepThreshold` (0.2) is cut to its first 300 characters plus a note naming a file under
 `<agent dir>/jev-spill/` that holds the whole output, which the agent reads back with `read` (`compaction.spill: false`
@@ -697,7 +699,7 @@ unrecognized value is ignored with a warning.
 
 | Variable | Effect |
 |---|---|
-| `TYPESAFE_API_KEY` | Required for any Jev call. Read by the SDK. |
+| `TYPESAFE_API_KEY` | Alternative credential for Jev calls when the omp registry has no TypeSafe credential. |
 | `TYPESAFE_CONFIG` | An alternate config file path, read instead of `<agent dir>/typesafe.json`. |
 | `PI_CODING_AGENT_DIR` | omp's active profile directory. Moves `typesafe.json`, the user-level priority files, the `/adversary dump` location and the compaction spill directory. |
 | `TYPESAFE_ROLE` | `"advisory"` or `"adversarial"`; overrides `role`. |

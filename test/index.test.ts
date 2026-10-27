@@ -30,6 +30,7 @@ const mockState = {
 	clientError: null as string | null,
 	resets: 0,
 	logger: undefined as unknown,
+	registries: [] as unknown[],
 };
 
 const root = mkdtempSync(join(tmpdir(), "omp-typesafe-index-"));
@@ -38,6 +39,7 @@ cpSync(join(import.meta.dir, "..", "src"), srcCopy, { recursive: true });
 
 const clientMock = () => ({
 	apiKeyPresent: () => mockState.apiKey,
+	refreshApiKey: async (registry: unknown) => { mockState.registries.push(registry); },
 	ask: async (state: any, questions: Record<string, any>, opts: Record<string, any> = {}) => {
 		const call: AskCall = { state, questions, opts };
 		mockState.calls.push(call);
@@ -108,6 +110,7 @@ afterAll(() => {
 
 beforeEach(() => {
 	subagentModule.resetSubagentStats();
+	mockState.registries = [];
 	mockState.apiKey = true;
 	mockState.calls = [];
 	mockState.clientError = null;
@@ -474,11 +477,23 @@ describe("session reset", () => {
 		const h = setup({}, [], { hasUI: true });
 		mockState.apiKey = false;
 		await h.start();
-		expect(h.notices).toContainEqual({ message: "TypeSafe adversary inactive: TYPESAFE_API_KEY not set", level: "warning" });
+		expect(h.notices).toContainEqual({ message: "TypeSafe adversary inactive: use /login typesafe or set TYPESAFE_API_KEY", level: "warning" });
 		const before = h.notices.length;
 		await h.fire("session_switch", { reason: "new" });
 		expect(h.notices.filter((n) => n.message.includes("TYPESAFE_API_KEY")).length).toBe(1);
 		expect(h.notices.length).toBe(before);
+	});
+
+	test("events, commands, and tool calls resolve the calling context's registry", async () => {
+		const h = setup();
+		const registry = { getApiKeyForProvider: async () => "registry-key" };
+		h.ctx.modelRegistry = registry;
+		await h.start();
+		await h.fire("context", { messages: [] });
+		await h.command("adversary", "status");
+		await h.command("typesafe", "test");
+		await h.tools.typesafe_ask.execute("call", { state: "hi", questions: [] }, undefined, undefined, h.ctx);
+		expect(mockState.registries).toEqual([registry, registry, registry, registry, registry]);
 	});
 
 	test("session_tree moves the turn cursor so the next turn is reviewed", async () => {

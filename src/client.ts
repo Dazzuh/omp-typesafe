@@ -26,6 +26,20 @@ let clientBaseURL: string | undefined;
 /** Account/endpoint-scoped: model changes must not bypass an insufficient-credit response. */
 let creditCooldown: { apiKey: string | undefined; baseURL: string | undefined; error: APIError; until: number } | null = null;
 let clientError: string | null = null;
+let registryApiKey: string | undefined;
+
+/** Resolve on each host entry so login, logout and key changes take effect without a restart. */
+export async function refreshApiKey(registry?: { getApiKeyForProvider: (provider: string) => Promise<string | undefined> }): Promise<void> {
+	try {
+		registryApiKey = (await registry?.getApiKeyForProvider("typesafe"))?.trim() || undefined;
+	} catch {
+		registryApiKey = undefined;
+	}
+}
+
+function resolvedApiKey(): string | undefined {
+	return registryApiKey || process.env.TYPESAFE_API_KEY?.trim() || undefined;
+}
 
 /** omp's extension logger: every method optional, extra args passed through. */
 export interface ClientLogger {
@@ -65,7 +79,7 @@ let lastResolvedModel: string | null = null;
 const INPUT_USD_PER_MTOK = 0.042;
 
 export function apiKeyPresent(): boolean {
-	return !!process.env.TYPESAFE_API_KEY?.trim();
+	return !!resolvedApiKey();
 }
 
 /**
@@ -76,11 +90,11 @@ export function apiKeyPresent(): boolean {
  */
 export function getClient(): TypeSafeClient {
 	const model = getConfig().model;
-	const apiKey = process.env.TYPESAFE_API_KEY?.trim() || undefined;
+	const apiKey = resolvedApiKey();
 	const baseURL = (process.env.TYPESAFE_BASE_URL?.trim() || undefined)?.replace(/\/+$/, "");
 	if (client && clientModel === model && clientApiKey === apiKey && clientBaseURL === baseURL) return client;
 	try {
-		client = new TypeSafeClient({ defaultModel: model, logLevel: "warn", logger: routedLogger });
+		client = new TypeSafeClient({ apiKey, defaultModel: model, logLevel: "warn", logger: routedLogger });
 		clientModel = model;
 		clientApiKey = apiKey;
 		clientBaseURL = baseURL;

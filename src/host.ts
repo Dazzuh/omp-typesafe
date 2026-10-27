@@ -65,6 +65,7 @@ export interface HostSessionHeader {
 /** What every handler, tool and command receives as `ctx`. */
 export interface HostContext {
 	cwd?: string;
+	modelRegistry?: { getApiKeyForProvider: (provider: string) => Promise<string | undefined> };
 	/** False in print, json and rpc runs: there is no one to ask and no `ask` tool. */
 	hasUI?: boolean;
 	ui?: { notify: (message: string, level?: NotifyLevel) => unknown };
