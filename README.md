@@ -136,6 +136,10 @@ outside the phases you enabled.
 
 ### Notes
 
+Displayed adversarial, advisory, ambiguity-gate and pipeline-check custom messages render as native cards in Tern,
+with severity, scores and evidence where present; plain terminals show readable text. The model receives the same note
+content shown below. Inline notes attached to tool results remain unchanged, and older hosts use their default display.
+
 ```
 <adversarial-note severity="concern" defect="contract_break" guidance="weigh, don't blindly obey"
   breaks_contract="0.89" incomplete_cutover="0.85" confidence="0.63"

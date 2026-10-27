@@ -23,6 +23,7 @@ import { agentDir, getConfig, getConfigWarnings, loadConfig, subagentGuardEnable
 import type { TypesafeRole } from "./config";
 import type { ExtensionAPI, HostContentBlock, HostContext, HostEvents, HostLogger, HostMessage, NotifyLevel, ToolCallResult, ZodSchema } from "./host";
 import { loadPriorities } from "./priorities";
+import { registerNoteRenderers } from "./render";
 import { getSubagentStats, resetSubagentStats, skipSubagent } from "./subagent";
 import { captureBaseline, collectEvidence, collectStatus, recordAction, repoOutline, resetEvidenceTurn } from "./evidence";
 import type { CollectOptions, Evidence } from "./evidence";
@@ -493,6 +494,7 @@ interface SteerOptions extends Pick<GateRunOptions, "status"> {
 
 export default function typesafeExtension(pi: ExtensionAPI) {
 	pi.setLabel("TypeSafe Adversary");
+	registerNoteRenderers(pi);
 	const logger = pi.logger;
 	const z = pi.zod;
 

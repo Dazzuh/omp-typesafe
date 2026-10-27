@@ -821,7 +821,7 @@ describe("README note examples", () => {
 	/** The sentence between an example's opening tag and its closing tag. */
 	const exampleClaim = (tag: string): string => {
 		const block = new RegExp(`<${tag}[\\s\\S]*?</${tag}>`).exec(readme)?.[0] ?? "";
-		const lines = block.split("\n");
+		const lines = block.split(/\r?\n/);
 		return lines[lines.length - 2];
 	};
 	const claimOf = (note: string | undefined): string => (note ?? "").split("\n")[1];

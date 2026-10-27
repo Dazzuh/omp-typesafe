@@ -250,10 +250,23 @@ export interface HostCommand {
 	handler: (args: string, ctx: HostContext) => Promise<void>;
 }
 
+export interface HostSpan { t: string; s?: string }
+export type HostNode =
+	| { k: "card"; p: { head: readonly HostSpan[]; tone: "info" | "warning" | "error" | "muted" }; c: readonly HostNode[] }
+	| { k: "md"; p: { text: string } }
+	| { k: "kv"; p: { items: readonly { k: readonly HostSpan[]; v: string }[] } };
+export interface HostComponent {
+	render: (width: number) => readonly string[];
+	describe: () => HostNode;
+}
+export type HostMessageRenderer = (message: { content: unknown }, options: { expanded: boolean }, theme: unknown) => HostComponent | undefined;
+
 export interface ExtensionAPI {
 	logger?: HostLogger;
 	zod: ZodBuilder;
 	setLabel: (label: string) => void;
+	registerMessageRenderer?: (customType: string, renderer: HostMessageRenderer) => void;
+	pi?: { Text: new (text?: string, paddingX?: number, paddingY?: number) => { render: (width: number) => readonly string[] } };
 	on: <K extends keyof HostEvents>(
 		event: K,
 		handler: (event: HostEvents[K]["event"], ctx: HostContext) => HostEvents[K]["result"] | Promise<HostEvents[K]["result"]>,

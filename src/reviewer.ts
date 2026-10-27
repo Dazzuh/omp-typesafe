@@ -191,6 +191,9 @@ const SEVERITY_ORDER: Record<Severity, number> = { nit: 0, concern: 1, blocker: 
 
 const KIND_NOUN: Record<ReviewKind, string> = { action: "action", message: "response", turn: "turn" };
 
+export const ADVERSARY_CUSTOM_TYPE = "ai.typesafe.adversary";
+export const ADVISORY_CUSTOM_TYPE = "ai.typesafe.advisory";
+
 const SEVERITY_INSTRUCTION: Record<ReviewKind, string> = {
 	action: "Rate the most serious defect present in this action.",
 	message: "Rate the most serious defect present in this response.",
@@ -807,7 +810,7 @@ export async function review(pi: PiLike, kind: ReviewKind, state: Record<string,
 		if (routed) {
 			const options: Record<string, unknown> = { deliverAs: routed.channel };
 			if (routed.triggerTurn) options.triggerTurn = true;
-			dispatch(pi, { customType: role === "advisory" ? "ai.typesafe.advisory" : "ai.typesafe.adversary", content: note, display: true, attribution: "agent" }, options);
+			dispatch(pi, { customType: role === "advisory" ? ADVISORY_CUSTOM_TYPE : ADVERSARY_CUSTOM_TYPE, content: note, display: true, attribution: "agent" }, options);
 		}
 		// History, budgets and immunity update only once the host call did not throw.
 		pushNote({ key: semanticKeyValue, sev: semanticSev, downgraded });
